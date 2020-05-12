@@ -2,7 +2,6 @@ import time
 import config
 import tensorflow as tf
 import numpy as np
-from IPython.display import clear_output
 
 '''
 Este módulo contém as funções padrões que são usada na rede neural.
@@ -53,7 +52,6 @@ dataset_check_flag=False
 def report(network):
     global dataset_check_flag
     
-    clear_output(wait=True)
     if dataset_check_flag:
         erros_interno=(network.erros(network.dataset_x,network.dataset_y))
             
@@ -75,7 +73,6 @@ def report(network):
 def report_GAN(network):
     global dataset_check_flag
     
-    clear_output(wait=True)
     if dataset_check_flag:
 
         erros_intern_class=network.classifier.erros(network.classifier.dataset_x,network.classifier.dataset_y)
