@@ -2,6 +2,8 @@ import numpy as np
 import tensorflow as tf
 import config
 
+__version__='2.0.1'
+
 '''
 Este arquivo armazena o código para a criação das camadas da rede neural, os tipos de camada disponíveis são:
 
@@ -14,6 +16,8 @@ Transposed Convolution Layer ou Deconvolution Layer (DeConv) - Camada que usa a 
 Batch Normalization Layer (BN) - Camada que faz a normalização dos inputs, é recomendada em Deep Neural Network após uma sequência de camada que representem uma etapa do processo, não há contraindicações para uso em outros contextos, porém, deve-se atentar ao fato de que para a normalização é necessário que os pacotes de treino tenham tamanho estritamente maior que 1, além disso, quanto menor o tamanho dos pacotes, maior a instabilidade desta camada, na minha experiência, é recomendável que o batch_size seja ao menos 100. Esta camada recebe os inputs, calcula a média e o desvio padrão amostral dos inputs, depois subtrai a média dos inputs e divide pelo desvio padrão, após isto, multiplica o valor resultante por um fator de correção e soma ao resultado um outro fator de correção. A otimização desta camada é feita nos fatores de correção.
 
 Intergration Layer - Esta camada integra duas redes neurais, seu uso é restrito a GAN, porém, caso o usuário ache útil, nada impede que seja utilizada em outro contexto. Esta camada recebe inputs, usa estes valores como entrada em uma rede neural e retorna o valor obtido. Este rede neural não passa por otimização.
+
+Intergration Layer - Esta camada une outras camada, tendo como output a junção dos outputs das camadas contidas nela. Este rede neural não passa por otimização, mas carrega os parematros das camadas contidas nela.
 
 Além disso, vale esclarecer o que são alguns termos que serão vistos em todas as camadas:
 Dropout - É uma otimização feita a partir da eliminação temporária de algumas coordenadas do valor de ativação da rede. O dropout_rate é um número entre 0 e 1 que representa a probabilidade de uma coordenada da ativação da camada não ser utilizada naquela execução. Ao se usar o dropout evita-se overfitting, pois inibimos a rede a se apoiar excessivamente em algumas poucas coordenadas, ou seja, fica mais difícil decorar os dados visto que eles mudam levemente a cada execução.
@@ -467,4 +471,44 @@ class integration(Layer):
         inputs=inpt
         for i in self.layers:
             inputs=i.execute(inputs,train_flag)
+        return inputs
+    
+class Mixed(Layer):
+    '''
+    Esta é a classe usada para criar a camada de mistura entre outras camadas.
+    '''
+    def __init__(self,layers,funcao_erro=None,funcao_acuracia=None):
+        '''
+        layers = lista de objetos da classe Layer
+        funcao_erro = função ou None
+        funcao_acuracia = função ou None
+        
+        layers é uma lista com as camadas a serem misturadas, estas camadas devem receber o mesmo número de argumentos.
+
+        As funções de erro e acurácia seguem a mesma descrição que está na classe Layer.
+        '''
+        self.type='Integration layer'
+        Layer.__init__(self,funcao_erro,funcao_acuracia)
+        self.n_inputs=layers[0].n_inputs
+        self.n_outputs=sum([layer.n_outputs for layer in layers])
+        self.layers=layers
+        self.params=[param for layer in layers for param in self.params]
+    def execute(self,inpt,train_flag):
+        '''
+        Este método computa a ativação desta camada.
+        
+        inputs:
+        inpt=tensorflow.Tensor ou objeto compatível
+        train_flag = bool
+        
+        outputs:
+        Objeto da mesma classe do inputs.
+        
+        Comentários:
+        O inpt é a entrada da camada e deve vier em um formato compatível com as operações do tensorflow.
+        train_flag indica se a execução da camada será usada para treino, se train_flag=True, então usa-se o dropout, de outro modo não se usa dropout.
+        '''
+        inputs=self.layers[0].execute(inpt,train_flag)
+        for i in self.layers[1:]:
+            inputs=tf.concat([inputs,i.execute(inpt,train_flag)],axis=0)
         return inputs
