@@ -1,5 +1,4 @@
-# Rede_neural
-Código para criação de redes neurais
+#Código para criação de redes neurais
 
 Para rodar os códigos são necessárias as versões mais recentes dos módulos a seguir:
 
