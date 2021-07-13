@@ -1,6 +1,5 @@
 import time
 import tensorflow as tf
-import numpy as np
 import dill
 import config
 from Otimizers import *
@@ -8,10 +7,18 @@ from Otimizers import *
 from Functions import report,report_GAN
 import Layers as Layers
 
-__version__='V2.0.0'
+__version__='2.3.0'
 
 print('TensorFlow version = {}'.format(tf.__version__))
 print('Network version = {}'.format(__version__))
+tf.config.optimizer.set_jit(config.XLA_opt)
+
+if config.custom_opt:
+    optimizations=['layout_optimizer','memory_optimizer','constant_folding','shape_optimization','remapping','arithmetic_optimization','dependency_optimization','loop_optimization','function_optimization','debug_stripper','disable_model_pruning','scoped_allocator_optimization','pin_to_host_optimization','implementation_selector','auto_mixed_precision','disable_meta_optimizer','min_graph_nodes']
+    opt_dict={}
+    for opt in optimizations:
+        exec("opt_dict['{0}']=config.{0}".format(opt))
+    tf.config.optimizer.set_experimental_options(opt_dict)
 
 '''
 Este código é o código usado para a criação rede neurais. Atualmente há suporte para 3 tipos de redes neurais:
@@ -48,14 +55,21 @@ class NeuralNetwork:
         - transformacoes é um argumento opcional que serve para armazenar instruções sobre o tratamento dos dados antes deles serem inseridos na rede neural.
         '''
         
-        self.version='NN_V2.0.0'
+        self.version='NN_'+__version__
         
         self.report=report_func
         self.check_size=check_size
         self.transformacoes=transformacoes
+        self.recurrent_flag=False
         self.layers=layers
         #Armazenando os parâmetros de todas as camadas da rede
-        self.params = [param for layer in layers for param in layer.params]
+        self.params = []
+        self.params_ref=[]
+        for layer in layers:
+            for param in layer.params:
+                if param.ref() not in self.params_ref:
+                    self.params.append(param)
+                    self.params_ref.append(param.ref())
         #Este dicionário armazena informações sobre o histórico de treino. Apesar de ser viável, não é recomendado que se armazene o historico dos paramentros, pois isso pode consumir muita memória.
         self.historico={'cost':[],'accuracy':[],'params':[]}
         
@@ -82,19 +96,13 @@ class NeuralNetwork:
         dataset deve ser uma função que retorna os dados para treino e para teste, os dados devem ser do tipo tensorflow.Tensor ou algum formato compatível. Vale observar que a rede espera que os elementos dos dados estejam nas colunas da matriz. Além disso, esta função deve receber apenas um argumento, durante a execução da rede neural, esta função será chamada com o argumento 'train' para pegar os dados de treino e 'validation' para pegar os dados de teste. Por último, caso o usuário não queira que esta rede tenha as funções destinadas ao treino, basta passar None como dataset, daí só serão criadas as funções necessárias para executar a rede.
         '''
         
-        #Definindo qual dispositivo deve ser usado no escopo do with. Ao explicitar que este bloco de código deve ser executado na CPU, evitamos que estes dados sejam armazenados na memória da GPU, economizando preciosos MB de memória.
-        with tf.device('/CPU:0'):
-            #Atualizando informações do banco de dados da rede e as variáveis associadas a ele.
-            self.dataset=dataset
-            self.dataset_x,self.dataset_y=dataset('train')
-            self.validation_x,self.validation_y=dataset('validation')
+        #Atualizando informações do banco de dados da rede e as variáveis associadas a ele.
+        self.dataset=dataset
 
-            self.len_dataset=self.dataset_y.shape[1]
-            self.len_validation=self.validation_y.shape[1]
-
-            self.n_subsets=self.len_dataset//self.len_subsets
-            self.check_intern_subsets_len=self.len_dataset//self.check_size
-            self.validation_subsets_len=self.len_validation//self.check_size
+        self.len_dataset,self.len_validation=dataset('sizes')[:2]
+        
+        self.check_intern_subsets_len=self.len_dataset//self.check_size+1
+        self.validation_subsets_len=self.len_validation//self.check_size+1
         
     def export_network(self,nome='default',diretorio='',tipo='layers'):
         '''
@@ -128,7 +136,7 @@ class NeuralNetwork:
         
     def update_parametros(self,parametros):
         '''
-        Este métodos atualiza os parâmetros das camadas da rede com os parâmetrosinseridos como argumento.
+        Este métodos atualiza os parâmetros das camadas da rede com os parâmetros inseridos como argumento.
         
         inputs:
         parametros = lista ou tupla
@@ -148,7 +156,7 @@ class FowardNetwork(NeuralNetwork):
     '''
     Esta classe é destinada a redes neurais cujo treino é direto, ou seja, redes neurais padrões. Além disso, há suporte para auto-encoders, pois o treino deste tipo de rede também é direto.
     '''
-    def __init__(self,dataset,layers,check_size,output_layer=-1,report_func=report,transformacoes=None):
+    def __init__(self,dataset,layers,check_size,output_layer=-1,report_func=report,transformacoes=None,sparse_flag=False):
         '''
         Este método inicializa a rede neural.
         
@@ -171,70 +179,61 @@ class FowardNetwork(NeuralNetwork):
         
         - transformacoes é um argumento opcional que serve para armazenar instruções sobre o tratamento dos dados antes deles serem inseridos na rede neural.
         '''
-        self.version='FN_V2.0.0'
-                
+        self.version='FN_'+__version__
+        
         NeuralNetwork.__init__(self,dataset,layers,check_size,report_func,transformacoes)
         
         self.output_layer=output_layer
         self.report=report_func
+        self.change_freq=tf.Variable(1000,dtype='int32')
+        self.sparse_flag=sparse_flag
         
-        #A função divide_data recebe uma função (pre_encode, pre_decode ou pre_classificar) e retorna uma função que divide os dados que recebe um pacotes do tamanho do check_size e depois executa a função original em cada pacote, no final a função concatena os pacotes e os retorna.  
-        def divide_data(func):
-            def divided_func(entrada):
-                n=entrada.shape[1]//self.check_size
-                if n>0:
-                    saida=tf.concat([func(entrada[:,indice*self.check_size:(indice+1)*self.check_size]) for indice in range(n)],axis=1)
-                    if entrada.shape[1]%self.check_size>0:
-                        saida=tf.concat([saida,func(entrada[:,(n)*self.check_size:])],axis=1) if n>0 else func(entrada)
-                else:
-                    saida=func(entrada)
-                return saida
-            return divided_func
-        
-        #Criando a função preliminar que executa a rede do início até o final, mais a frente esta função será usada para criar a função de classificação
-        #O decorator @tf.function serve para sinalizar ao tensorflow que esta função deve ter a execução otimizada, consulte a documentação do tensorflow para mais informações a respeito.
-        @tf.function
-        def pre_classificar(entrada):
-            processamento=entrada
-            for layer in self.layers:
-                processamento=layer.execute(processamento,False)
-            return processamento
-        
-        #Criando função de classificação
-        self.classificar=divide_data(pre_classificar)
-        
-        #Caso a saída da rede não seja na última camada, cria-se duas funções que executam pedaços separados da rede, a função self.encode executa a rede do inicio até a camada de saída e a self.decode executa a rede da camada posterior à saída até o final.
-        if output_layer!=-1:
-            
-            @tf.function
-            def pre_encode(entrada):
-                processamento=entrada
-                for layer in self.layers[:self.output_layer+1]:
-                    processamento=layer.execute(processamento,False)
-                return processamento
-                
-            @tf.function
-            def pre_decode(entrada):
-                processamento=entrada
-                for layer in self.layers[self.output_layer+1:]:
-                    processamento=layer.execute(processamento,False)
-                return processamento
-            
-            self.encode=divide_data(pre_encode)
-            self.decode=divide_data(pre_decode)
-            
-        #Este dicionário armazena os otimizadores já criados. Para mais informações sobre os otimizadores consulte o arquivo "Otimizers.py"   
         self.otimizers={}
-        
-        #Criando a função que calcula o erro cometido na classificação de um certo dado. Esta função recebe um dado e o label desse dado.
-        @tf.function
-        def pre_erros(x,y):
-            expected_value=self.classificar(x)
-            return layers[-1].accuracy_check(expected_value,y)
+        self.best_accuracy=None
 
-        self.erros=pre_erros
+    @tf.function(experimental_compile=config.XLA_func)
+    def classificar(self,entrada,previous_value=None):
+        processamento=entrada
+        for layer in self.layers:
+            processamento=layer.execute(processamento,False)
+        return processamento
+
+    def erros(self,x,y):
+        expected_value=self.classificar(x)
+        if self.sparse_flag:
+            return self.layers[-1].accuracy_check(expected_value,tf.sparse.to_dense(y))
+        else:
+            return self.layers[-1].accuracy_check(expected_value,y)
+
+    #Caso a saída da rede não seja na última camada, cria-se duas funções que executam pedaços separados da rede, a função self.encode executa a rede do inicio até a camada de saída e a self.decode executa a rede da camada posterior à saída até o final.
+    @tf.function(experimental_compile=config.XLA_func)
+    def encode(self,entrada):
+        #assert self.output_layer>=0 and isinstance(self.output_layer,int),'Esta rede não é um auto-encoder. Caso você queira um auto-encoder, defina output_layer como um inteiro não-negativo.'
+        processamento=entrada
+        for layer in self.layers[:self.output_layer+1]:
+            processamento=layer.execute(processamento,False)
+        return processamento
+
+    @tf.function(experimental_compile=config.XLA_func)
+    def decode(self,entrada):
+        assert self.output_layer>=0 and isinstance(self.output_layer,int),'Esta rede não é um auto-encoder. Caso você queira um auto-encoder, defina output_layer como um inteiro não-negativo.'
+        processamento=entrada
+        for layer in self.layers[self.output_layer+1:]:
+            processamento=layer.execute(processamento,False)
+        return processamento
+
+    def foward_prop(self,x,y):
+        #calculando regularização.
+        cost = 0
+        #Adicionando o custo de cada camada ao custo total. Cada camada tem uma flag que informa se o custo da camada deve ser somado ao custo total.
+        current_value=x
+        for layer in self.layers:
+            current_value=layer.execute(current_value,True)
+            if layer.cost_flag:
+                cost=cost+layer.cost_weight*layer.cost(current_value,y)
+        return [cost]
         
-    def otimize(self,number_of_epochs,no_better_interval,weight_penalty,learning_method,batch_size,update_data=False):
+    def otimize(self,number_of_epochs,no_better_interval,weight_penalty,learning_method,batch_size,do_something=lambda x:x):
         '''
         Esta função otimiza a rede neural.
         
@@ -265,8 +264,7 @@ class FowardNetwork(NeuralNetwork):
         self.otimization=learning_method
         self.weight_penalty=weight_penalty
         
-        if update_data:
-            self.update_dataset(dataset)
+        best_param=self.params
         
         #Caso o otimizador ainda não tenha sido criado, cria-se o otimizador e o armazena no dicionário de otimizadores.
         if learning_method[0] not in self.otimizers.keys():
@@ -277,53 +275,75 @@ class FowardNetwork(NeuralNetwork):
             
         self.reset_hist()
         self.update_params(weight_penalty,*learning_method[1:])
-
-        self.len_subsets=batch_size
-        
-        self.n_subsets=self.len_dataset//self.len_subsets
-        self.check_intern_subsets_len=self.len_dataset//self.check_size
-        self.validation_subsets_len=self.len_validation//self.check_size
         
         no_better_count=0
         initial_epoch=self.times
+        
+        self.len_subsets=batch_size
+        self.n_subsets=self.len_dataset//self.len_subsets+1
+        
         
         self.loading_symbols=['\\','|','/','-']
         self.loading_index=0
         
         #O usuário tem a opção de interromper o treino antecipadamente, para isto, basta gerar o KeyboardInterrupt (basta apertar Ctrl + C no Idle do Python).
         try:
+            indices=tf.range(self.len_dataset)
             while self.times-initial_epoch<number_of_epochs:
                 self.times+=1
                 #self.tempo armazena o tempo no início da execução, isto é útil para medir o tempo gasto para executar uma rodada de treino.
-                self.tempo=time.time()
-                
-                #Gerando índices do banco de dados.
-                indices=np.asarray(range(self.len_dataset))
-                
-                #Embaralhando índices.
-                np.random.shuffle(indices)
-                
-                #Reordenando o banco de dados na ordem dos índices embaralhados.
-                self.dataset_x,self.dataset_y=tf.gather(self.dataset_x,indices,axis=1),tf.gather(self.dataset_y,indices,axis=1)
-                
+                self.tempo=time.time()                
+                self.initial_time=time.time()
                 #Treinando a rede para cada pacote de dados.
+                indices=tf.random.shuffle(indices)
+                iterantion=[[],[tf.constant(0)]]
+                grad_range=[0,0]
+                last_time=time.time()
+                current_time=time.time()
                 for indice in range(self.n_subsets):
-                    iteration=self.otimization_func(self.dataset_x[:,int(indice*self.len_subsets):int((indice+1)*self.len_subsets)],
-                                            self.dataset_y[:,int(indice*self.len_subsets):int((indice+1)*self.len_subsets)])
-                
+                    assert tf.math.greater(39,self.grad_scale),'A escala do gradiente está muito alta (maior que 10^39), verifique se não há um erro no código. A princípio, a variável que controla a escala do gradiente só aumenta se a derivada de alguma variável for infinita, porém, se houver algum erro no código ou nos dados, de modo que a função de custo retorne NaN, então a escala do gradiente irá aumentar indefinidamente, nestes casos é necessário revisar o código e o conjunto de dados usado.'
+                    #Amostrando indices dos dados
+                    slices=indices[indice*self.len_subsets:(indice+1)*self.len_subsets]
+                    iteration=self.otimization_func(*self.dataset('train',indices=slices))
+                    grad_range=iteration[1:3]
+                    last_time=current_time
+                    current_time=time.time()
+                    
+                    do_something(self)
+                    
+                    print('Batch: '+str(int(10000*indice/self.n_subsets)/100)+'% - Time spent: '+str(int((current_time-last_time)*1000)/1000)+' - Último erro: '+str(iteration[4].numpy())+\
+                          ' - Grad range : {0}~{1}'.format(grad_range[1],grad_range[0])+'              ',end='\r')
+                print('Batch: '+str(int(10000*indice/self.n_subsets)/100)+'% - Time spent: '+str(int((current_time-last_time)*1000)/1000)+' - Último erro: '+str(iteration[4].numpy())+\
+                      ' - Grad range : {0}~{1}'.format(grad_range[1],grad_range[1])+'              ',end='\r')
+                self.end_time=time.time()
                 #Avaliando a função de custo e a função de acurácia depois da rodada atual de treino.
-                erros=self.erros(self.validation_x,self.validation_y)
+                
+                erros_list=tf.zeros([0,2],dtype=config.float_type)
+                indices=tf.range(self.len_validation)
+                indices=tf.random.shuffle(indices)
+                
+                for indice in range(self.validation_subsets_len):
+                    slices=indices[indice*self.check_size:(indice+1)*self.check_size]
+                    x,y=self.dataset('validation',slices)
+                    instant_erro=self.erros(x,y)
+                    erros_list=tf.concat([erros_list,[instant_erro]],axis=0)
+                erros=tf.math.reduce_mean(erros_list,axis=0)
                 
                 #Registrando os valores obtidos.
-                self.historico['cost'].append(erros[0])
-                self.historico['accuracy'].append(erros[1])
-                
-                #Caso mais de 50 valores tenham sido armazenados, deleta-se os mais antigos até que existam apenas 50 valores.
-                if len(self.historico['cost'])>50:
-                    self.historico['cost']=self.historico['cost'][-50:]
-                    self.historico['accuracy']=self.historico['accuracy'][-50:]
-
-                #self.historico['params'].append([k.numpy() for k in self.params])
+                if self.best_accuracy is None:
+                    self.best_accuracy=erros[1]
+                    self.best_cost=erros[0]
+                    self.best_param=[param.numpy() for param in self.params]
+                elif erros[1]>self.best_accuracy:
+                    self.best_accuracy=erros[1]
+                    self.best_cost=erros[0]
+                    #self.export_network('backup\\NN_{}.layers'.format(erros[1]))
+                    self.best_param=[param.numpy() for param in self.params]
+                    no_better_count=0
+                else:
+                    no_better_count+=1
+                self.historico['cost']=self.historico['cost'][-5:]+[erros[0]]
+                self.historico['accuracy']=self.historico['accuracy'][-5:]+[erros[1]]
                 
                 #Gerando report.
                 self.report(self)
@@ -331,89 +351,46 @@ class FowardNetwork(NeuralNetwork):
                 self.loading_index+=1
                 
                 #Verificando o critério de paragem antecipada.
-                if self.times%no_better_interval==0 and self.times>2*no_better_interval:
-                    if tf.math.reduce_mean(self.historico['accuracy'][-no_better_interval:])<=tf.math.reduce_mean(self.historico['accuracy'][-2*no_better_interval:-no_better_interval]):
-                        print('Early Stop')
-                        break
+                if no_better_count>no_better_interval:
+                    self.update_parametros(self.best_param)
+                    print('Early Stop')
+                    break
             if self.times-initial_epoch>=number_of_epochs:
+                self.update_parametros(self.best_param)
                 print('Finished')
         except KeyboardInterrupt:
-            print('Early Stop')
+            self.update_parametros(self.best_param)
+            print('Forced Stop')
             
 class GANetwork(NeuralNetwork):
-    '''
-    Esta classe é destinada a redes neurais que são treinadas através da competição entre si (suporte para no máximo duas redes). São criadas duas redes neurais, uma chamada de generator e outra chamada classifier, a classifier é treinada para classificar um vetor como pertencente ao banco de dados ou não, já a generator é uma rede que recebe um ruído aleatório e retornar um vetor com as mesmas dimensões de um vetor do banco de dados da classifier, sendo que a generator é treinada para enganar a classifier, ou seja, ela tenta imitar um vetor do banco de dados. As redes são treinadas de maneira alternada, de modo que elas competem entre si, pois diminuir o erro da classifier implica em aumentar o erro da generator e vice-versa. As redes estão "prontas" quando se obtêm um equilíbrio de Nash entre as duas redes.
-    '''
-    def __init__(self,dataset_class,dataset_gen,layers_gen,layers_class,check_size,report_func=report_GAN,transformacoes=None):
-        '''
-        Este método inicializa a rede neural.
+    def __init__(self,dataset_class,dataset_gen,layers_gen,layers_class,check_size,tolerance=0,report_func=report_GAN,transformacoes=None):        
+        self.version='GAN_'+__version__
         
-        dataset_class = função ou None
-        dataset_gen = função ou None
-        layers_class = lista ou tupla
-        layers_gen = lista ou tupla
-        check_size = int > 0
-        report_func = função
-        transformacoes = Qualquer coisa
-        
-        - Os dataset's devem seguir as mesmas condições do dataset de uma FowardNetwork, porém, com algumas condições adicionais:
-            1 - dataset_gen deve retornar uma lista cujo primeiro elemento é o ruído e o segundo são os labels que a generator deve tentar alcançar.
-            2 - dataset_class deve retornar uma lista cujo primeiro elemento é o conjunto dos dados que pertencem aos bancos de dados e a segunda coordenada é o label que a classifier deve dar a eles.
-        
-        - layers devem ser listas ou tuplas de objetos da classe layer (para mais informações veja o arquivo 'Layers.py'), layers_gen são as camadas do gerador e layers_class são as camadas do classificador. Vale lembrar que a saída da última camada do gerador deve ter o mesmo tamanho da entrada da primeira camada do classificador.
-        
-        - check_size é a quantidade máxima de inputs que a rede neural irá computar por vez, caso seja requisitado que ela cálcule mais inputs do que o check_size ela dividirá os dados inseridos em pacotes com o tamanho do check_size e computará um pacote por vez. Informar um check_size muito grande pode ocasionar em erros de falta de memória (OOM).
-        
-        - report_func deve ser uma função que exibe um relatório do treino a cada rodada de treino, o único argumento que ela deve receber é a rede neural.
-        
-        - transformacoes é um argumento opcional que serve para armazenar instruções sobre o tratamento dos dados antes deles serem inseridos na rede neural.
-        '''
-        
-        self.version='GAN_V2.0.0'
-        
-        #Salvando todos os layers.
+        self.tolerance=tolerance
+
         layers=layers_gen+layers_class
         NeuralNetwork.__init__(self,dataset_class,layers,check_size,report_func,transformacoes)
-        
-        #Armazenando uma lista com os parâmetros de cada rede.
+
         self.params_gen = [param for layer in layers_gen for param in layer.params]
         self.params_class = [param for layer in layers_class for param in layer.params]
-        
-        #Armazenando informações sobre os dados.
-        self.len_dataset=dataset_class('train')[1].shape[1]
-        self.len_validation=dataset_class('validation')[1].shape[1]
+
+        self.len_dataset,self.len_validation=dataset_gen('sizes')
         self.dataset_gen=dataset_gen
         
-        #Criando a camada de integração. Esta camada integra o classificador com o gerador, permitindo que o gerador treine usando os labels do classificador.
         layers.append(Layers.integration(layers=layers_class,
-                                    funcao_erro=layers_gen[-1].funcao_erro,
-                                    funcao_acuracia=layers_gen[-1].funcao_acuracia))
+                                         funcao_erro=layers_gen[-1].funcao_erro,
+                                         funcao_acuracia=layers_gen[-1].funcao_acuracia))
         
-        #Registrando que a função de custo inserida na última cada do gerador não deve ser usada para calcular o erro, pois a função de erro foi herdada pela camada de integração.
         layers_gen[-1].cost_flag=False
-        
-        #Criando rede geradora.
+
         self.generator=FowardNetwork(dataset=self.dataset_gen,
                                     layers=layers_gen+[layers[-1]],
                                     check_size=check_size,
                                     report_func=lambda x: None,
-                                    output_layer=-2)
+                                    output_layer=len(layers_gen)-1)
         
-        #Criando função preliminar para o dataset da rede classificadora.
-        def pre_dataset_class(label):
-            generator_data=self.dataset_gen(label)
-            observed_data=dataset_class(label)
-            
-            generator_x=self.generator.encode(generator_data[0])
-            with tf.device('/CPU:0'):
-                classifier_x=np.concatenate([generator_x,observed_data[0]],axis=1)
-                classifier_y=np.concatenate([np.zeros(observed_data[1].shape,config.float_type),observed_data[1]],axis=1)
-            
-            return classifier_x,classifier_y
-        
-        self.dataset_class=pre_dataset_class
-        
-        #Gerando rede classificadora.
+        self.pre_dataset_class=dataset_class
+
         self.classifier=FowardNetwork(dataset=self.dataset_class,
                                       layers=layers_class,
                                       check_size=check_size,
@@ -422,61 +399,110 @@ class GANetwork(NeuralNetwork):
         self.gerar=self.generator.encode
         self.classificar=self.classifier.classificar
         
+        with tf.device('/device:CPU:0'):
+            self.pre_data_x,self.pre_data_y=dataset_class('train')
+            self.pre_test_x,self.pre_test_y=dataset_class('validation')
+
+        self.classifier_train_x=tf.zeros([self.len_dataset*2,self.pre_data_x.shape[1]],dtype=self.pre_data_x.dtype)
+        self.classifier_train_y=tf.zeros([self.len_dataset*2,self.pre_data_y.shape[1]],dtype=self.pre_data_y.dtype)
+        self.classifier_val_x=tf.zeros([self.len_validation*2,self.pre_test_x.shape[1]],dtype=self.pre_test_x.dtype)
+        self.classifier_val_y=tf.zeros([self.len_validation*2,self.pre_test_y.shape[1]],dtype=self.pre_test_y.dtype)
+        
+        self.renew_dataset_class()
+    
+    def renew_dataset_class(self):
+        chuncks=[self.pre_data_x]
+        indices=tf.range(self.len_dataset)
+        for indice in range(self.len_dataset//self.check_size+1):
+            chuncks.append(self.generator.encode(self.dataset_gen('train',indices[indice*self.check_size:(indice+1)*self.check_size])[0]))
+        self.classifier_train_x=tf.concat(chuncks,axis=0)
+
+        self.classifier_train_y=tf.concat([self.pre_data_y,
+                                                  tf.zeros(self.pre_data_y.shape,
+                                                           dtype=config.float_type)+self.tolerance],
+                                                 axis=0)
+        
+        chuncks=[self.pre_test_x]
+        indices=tf.range(self.len_validation)
+        for indice in range(self.len_validation//self.check_size+1):
+            chuncks.append(self.generator.encode(self.dataset_gen('validation',indices[indice*self.check_size:(indice+1)*self.check_size])[0]))
+        self.classifier_val_x=tf.concat(chuncks,axis=0)
+
+        self.classifier_val_y=tf.concat([self.pre_test_y,
+                                                tf.zeros(self.pre_test_y.shape,
+                                                         dtype=config.float_type)+self.tolerance],
+                                               axis=0)
+        
+    def dataset_class(self,label,indices=None):
+        if label=='sizes':
+            return self.len_dataset*2,self.len_validation*2
+        elif label=='train':
+            if indices is None:
+                indices=tf.range(self.len_dataset*2)
+            data_x=tf.gather(self.classifier_train_x,indices,axis=0)
+            data_y=tf.gather(self.classifier_train_y,indices,axis=0)
+            return data_x,data_y
+        elif label=='validation':
+            if indices is None:
+                indices=tf.range(self.len_validation*2)
+            data_x=tf.gather(self.classifier_val_x,indices,axis=0)
+            data_y=tf.gather(self.classifier_val_y,indices,axis=0)
+            return data_x,data_y
+        
+    def otimize_network(self,network):
+        indices=tf.range(network.len_dataset)
+        for time in range(network.number_of_epochs):
+                indices=tf.random.shuffle(indices)
+                iterantion=[[],[tf.constant(0)]]
+                for indice in range(network.n_subsets):
+                    slices=indices[indice*self.batch_size:(indice+1)*self.batch_size]
+                    iteration=network.otimization_func(*network.dataset('train',indices=slices))
+                    print('Progresso: '+str(int(10000*((time*network.n_subsets+indice)/(network.number_of_epochs*network.n_subsets)))/100)+'%         ',end='\r')
+        
     def otimize(self,number_of_epochs,weight_penalty,learning_method_gen,learning_method_class,batch_size):
-        '''
-        Esta função otimiza as redes neurais.
-        
-        inputs:
-        number_of_epochs = int >= 0
-        weight_penalty = float
-        learning_method_gen = lista ou tupla
-        learning_method_class = lista ou tupla
-        batch_size = int > 0
-        
-        outputs:
-        Nenhum
-        
-        Comentários:        
-        number_of_epochs é o número máximo de rodadas de treino a serem executadas
-        
-        weight_penalty é o peso a ser dado a regularização dos parâmetros das camadas.
-        
-        Os learning_method's são o método de aprendizado a ser usado em cada rede neural, eles devem ser da mesma forma do learning_method usado na FowardNetwork.
-        
-        batch_size é o tamanho dos pacotes de treino, caso a quantidade de elementos nos dados de treino não seja múltiplo do batch_size, os elementos que estiverem sobrando no final não serão usados no treino.
-        '''
         initial_epoch=self.times
-        #O usuário tem a opção de interromper o treino antecipadamente, para isto, basta gerar o KeyboardInterrupt (basta apertar Ctrl + C no Idle do Python).
-        try:
-            #Inicializando os parâmetros de otimização do gerador.
-            self.generator.otimize(0,
-                                   learning_method_gen[0],
-                                   weight_penalty[0],
-                                   learning_method_gen[1:],
-                                   batch_size)
+        
+        self.weight_penalty=weight_penalty
+        self.classifier.otimization,self.generator.otimization=learning_method_class,learning_method_gen
+        self.batch_size=batch_size
+        
+        self.classifier.weight_penalty=weight_penalty[0]
+        self.generator.weight_penalty=weight_penalty[1]
+        
+        for indice,network in enumerate([self.classifier,self.generator]):
+            network.number_of_epochs=number_of_epochs[indice+1]
+            network.n_subsets=network.len_dataset//batch_size+1
+            if network.otimization[0] not in network.otimizers.keys():
+                exec('network.otimizers["{0}"]=create_otimizer_{0}(network)'.format(network.otimization[0]))
+        
+            network.otimization_func,network.update_params,network.reset_hist=network.otimizers[network.otimization[0]]
+            network.reset_hist()
+            network.update_params(weight_penalty[indice],*network.otimization[1:])
             
-            while self.times<=number_of_epochs+initial_epoch:
-                #Este for treina cada rede neural uma vez, sendo que primeiro treina-se a rede classificadora e depois a geradora
-                for network,other_network,learning_method,index in zip((self.classifier,self.generator),
-                                                                       (self.generator,self.classifier),
-                                                                       (learning_method_class,learning_method_gen),
-                                                                       (1,0)):
+        try:           
+            while self.times<=(number_of_epochs[0])+initial_epoch:
+                for network,name in zip((self.classifier,self.generator),('Classificador','Gerador')):
+                    
                     self.times+=0.5
                     self.tempo=time.time()
+                    self.last_name=name
 
-                    network.otimize(number_of_epochs,
-                                    learning_method[0],
-                                    weight_penalty[index],
-                                    learning_method[1:],
-                                    batch_size)
+                    self.otimize_network(network)
+                    if name=='Gerador':
+                        self.renew_dataset_class()
+                    
+                    for other_network in (self.classifier,self.generator):
+                        erros_list=tf.zeros([0,2],dtype=config.float_type)
+                        indices=tf.range(other_network.len_validation)
+                        indices=tf.random.shuffle(indices)
+                        for indice in range(other_network.validation_subsets_len):
+                            x,y=other_network.dataset('validation',indices[indice*self.check_size:(indice+1)*self.check_size])
+                            instant_erro=other_network.erros(x,y)
+                            erros_list=tf.concat([erros_list,[[i*x.shape[0] for i in instant_erro]]],axis=0)
+                        erros=tf.math.reduce_sum(erros_list,axis=0)/other_network.len_validation
 
-                    self.classifier.update_dataset(self.classifier.dataset)
-                    self.generator.update_dataset(self.generator.dataset)
-
-                    erros=other_network.erros(other_network.validation_x,other_network.validation_y)
-
-                    other_network.historico['cost'].append(erros[0])
-                    other_network.historico['accuracy'].append(erros[1])
+                        other_network.historico['cost'].append(erros[0])
+                        other_network.historico['accuracy'].append(erros[1])
 
                     self.loading_symbols=['\\','|','/','-']
                     self.loading_index=0
@@ -484,7 +510,6 @@ class GANetwork(NeuralNetwork):
                     self.report(self)
 
                     self.loading_index+=1
-            
             print('Finished')
         except KeyboardInterrupt:
-            print('Early Stop')
+            print('Forced Stop')

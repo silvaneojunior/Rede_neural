@@ -1,44 +1,7 @@
 import config
-import numpy as np
+import tensorflow as tf
 
-def normalize(dados,mean_flag=False,std_flag=False):
-    '''
-    Esta função calcula a média e o desvio padrão de um conjunto de dados.
-    
-    inputs:
-    dataset: 2-D numpy array (ou objeto análogo com compatibilidade com o numpy)
-    mean_flag: bool
-    std_flag: bool
-    
-    outputs:
-    lista: contém uma lista com as normalizações na primeira entrada, uma função que normaliza dados na segunda e a função inversa da normalização na terceira.
-    
-    Comentários:
-    mean_flag ativa a normalização da média: calcula-se a média das coordenadas do dataset, depois subtrai-se a média dos dados.Caso a flag estaja desativada, o valor retornado é zero.
-    std_flag ativa a normalização da variância: calcula-se o desvio padrão das coordenadas do dataset, depois dividi-se os dados pelo desvio padrão.Caso a flag estaja desativada, é retornado um vetor de 1's.
-    '''
-    normalizacoes=[]
-    dataset=dados[:]
-    
-    if mean_flag:
-        mean=np.mean(dataset,axis=1).reshape([len(dataset),1])
-        dataset=(dataset-mean)
-        normalizacoes.append(mean)
-    else:
-        normalizacoes.append(0)
-
-    if std_flag:
-        std=np.std(dataset,axis=1).reshape([len(dataset),1])
-        np.place(std,std==0,1)
-        dataset=(dataset/std)
-        normalizacoes.append(std)
-    else:
-        std=np.asarray([[1]]*dataset.shape[0],dtype=config.float_type)
-        normalizacoes.append(std)
-        
-    return(normalizacoes,lambda x: ((x-normalizacoes[0])/normalizacoes[1]),lambda x: ((normalizacoes[1]*x)+normalizacoes[0]))
-
-def eigen_decomp(dados,tol=False):
+def normalize(dados,mean_flag=True,std_flag=True,eigen_flag=False):
     '''
     Faz a decomposição espectral do matrix de covariância do conjunto de dados que foi inserido.
     
@@ -52,19 +15,44 @@ def eigen_decomp(dados,tol=False):
     Comentários:
     tol é a tolerância para auto-valores pequenos, como a matriz de covariância é sempre simetrica definida positiva, então, por definição, todos os seus auto-valores são positivos, assim, para eliminar os auto-valores pequenos basta eliminar os auto-valores que são menores que uma constante C, definimos esta constante como 10**tol, caso tol seja diferente de 0, do contrário todos os auto-valores são aceitos.
     '''
-    dataset=dados[:]
-    covar=np.cov(dataset)
-    eigen=np.linalg.eig(covar)
-    eigen_values=eigen[0]
-    eigen_vectors=eigen[1].T
-
-    if tol:
-        eigen_matrix=eigen_vectors[eigen_values>10**(tolerancia_eigen),:]
+    
+    data=tf.convert_to_tensor(dados)
+    if mean_flag:
+        mean=tf.math.reduce_mean(data,axis=0,keepdims=True)
     else:
-        eigen_matrix=eigen_vectors
+        mean=tf.math.reduce_mean(data,axis=0,keepdims=True)*0
+    if std_flag:    
+        std=tf.math.reduce_std(data,axis=0,keepdims=True)+10**-10
+    else:
+        std=(tf.math.reduce_std(data,axis=0,keepdims=True)+10**-10)**0
+    
+    normaliza=lambda x: (x-mean)/std
+    desnormaliza=lambda x: x*std+mean
+    
+    norm_data=normaliza(data)
+    
+    cov_matrix=tf.matmul(tf.transpose(norm_data),norm_data)/data.shape[0]
 
+    if eigen_flag:
+        eigen_values,eigen_vector=tf.linalg.eigh(cov_matrix)
 
-    eigen_matrix=eigen_matrix.astype(config.float_type)
+        ortogonal_data=tf.matmul(norm_data,eigen_vector)
+        std_ortogonal=tf.math.reduce_std(ortogonal_data,axis=0,keepdims=True)+10**-10
+    else:
+        eigen_values=tf.ones([data.shape[1]],dtype=data.dtype)
+        eigen_vector=tf.eye(data.shape[1],dtype=data.dtype)
 
-    dataset=np.dot(eigen_matrix,dataset)
-    return([eigen_matrix,eigen_values],lambda x: np.dot(eigen_matrix,x),lambda x: np.dot(eigen_matrix.T,x))
+        std_ortogonal=tf.ones([1,data.shape[1]],dtype=data.dtype)
+
+    transforma_pca=lambda x: tf.matmul(normaliza(x),eigen_vector)/std_ortogonal
+    destransforma_pca=lambda x: desnormaliza(tf.matmul((x*std_ortogonal),tf.transpose(eigen_vector)))
+        
+    return({'Média':mean,
+            'Desvio padrão': std,
+            'Auto valores':eigen_values,
+            'Auto vetores':eigen_vector,
+            'Desvio padrão após mudança de base':std_ortogonal,
+            'Normaliza':normaliza,
+            'Desnormaliza':desnormaliza,
+            'PCA':transforma_pca,
+            'DesPCA':destransforma_pca})
