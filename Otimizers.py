@@ -79,9 +79,9 @@ def create_otimizer_SGD(network):
                tf.cond(flag_nan,
                     lambda: 'Flag NaN',
                     lambda: tf.strings.as_string(tf.cast(cost*(10**(network.grad_scale)),'float32'))),
-               tf.math.reduce_max([tf.math.reduce_max((grad*(10**(network.grad_scale)))**2) for grad in grads])**0.5,
-               tf.math.reduce_min([tf.math.reduce_min((grad*(10**(network.grad_scale)))**2) for grad in grads])**0.5,
-               cost]+prop_outputs[1:]
+               (tf.math.reduce_max([tf.math.reduce_max((grad*(10**(network.grad_scale)))**2) for grad in grads])**0.5)*10**(network.grad_scale),
+               (tf.math.reduce_min([tf.math.reduce_min((grad*(10**(network.grad_scale)))**2) for grad in grads])**0.5)*10**(network.grad_scale),
+               cost*10**(network.grad_scale)]+prop_outputs[1:]
     
     #Criando função que atualiza os parâmetros de treino.
     update_parameter=lambda x_1,x_2,x_3: (weight_penalty.assign(x_1),learnrate.assign(x_2),fric.assign(x_3))
@@ -176,9 +176,9 @@ def create_otimizer_Adam(network):
                tf.cond(flag_nan,
                     lambda: 'Flag NaN',
                     lambda: tf.strings.as_string(tf.cast(cost*(10**(network.grad_scale)),'float32'))),
-               tf.math.reduce_max([tf.math.reduce_max((grad*(10**(network.grad_scale)))**2) for grad in grads])**0.5,
-               tf.math.reduce_min([tf.math.reduce_min((grad*(10**(network.grad_scale)))**2) for grad in grads])**0.5,
-               cost]+prop_outputs[1:]
+               (tf.math.reduce_max([tf.math.reduce_max((grad*(10**(network.grad_scale)))**2) for grad in grads])**0.5)*10**(network.grad_scale),
+               (tf.math.reduce_min([tf.math.reduce_min((grad*(10**(network.grad_scale)))**2) for grad in grads])**0.5)*10**(network.grad_scale),
+               cost*10**(network.grad_scale)]+prop_outputs[1:]
     
     return (update_weigths,update_parameter,reset_hist)
 
@@ -254,9 +254,9 @@ def create_otimizer_RMSProp(network):
                tf.cond(flag_nan,
                     lambda: 'Flag NaN',
                     lambda: tf.strings.as_string(tf.cast(cost*(10**(network.grad_scale)),'float32'))),
-               tf.math.reduce_max([tf.math.reduce_max((grad*(10**(network.grad_scale)))**2) for grad in grads])**0.5,
-               tf.math.reduce_min([tf.math.reduce_min((grad*(10**(network.grad_scale)))**2) for grad in grads])**0.5,
-               cost]+prop_outputs[1:]
+               (tf.math.reduce_max([tf.math.reduce_max((grad*(10**(network.grad_scale)))**2) for grad in grads])**0.5)*10**(network.grad_scale),
+               (tf.math.reduce_min([tf.math.reduce_min((grad*(10**(network.grad_scale)))**2) for grad in grads])**0.5)*10**(network.grad_scale),
+               cost*10**(network.grad_scale)]+prop_outputs[1:]
     
     return (update_weigths,update_parameter,reset_hist)
 

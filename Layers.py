@@ -3,7 +3,7 @@ import config
 from Functions import L2_regularization
 import Functions as default
 
-__version__='2.3.0'
+__version__='2.4.0'
 
 '''
 Este arquivo armazena o código para a criação das camadas da rede neural, os tipos de camada disponíveis são:
@@ -68,6 +68,10 @@ class Layer:
     #@tf.function(experimental_compile=config.XLA_func,experimental_relax_shapes=True)
     def accuracy_check(self,inputs,outputs):
         return self.funcao_erro(inputs,outputs),self.funcao_acuracia(inputs,outputs)
+    def compute_mask(self, inputs, mask=None):
+        return mask
+    def predict(self,inputs,mask=None):
+        return self.execute(inputs,mask)
     
 class FC(Layer):
     '''
@@ -79,37 +83,10 @@ class FC(Layer):
     Sendo que Y é o retorno desta rede.
     Obs.: W*X representa aplicar a transformação linear W no vetor X.
     '''
-    def __init__(self,n_inputs,n_neurons,ativ_func,bias_offset=0,normalization=-1,dropout_rate=0.0,weight_var=None,funcao_erro=None,funcao_acuracia=None,funcao_regularizacao=L2_regularization):
-        '''
-        Inicializando a camada.
-        
-        n_inputs = int > 0
-        n_neurons = int > 0
-        ativ_func = função
-        bias_offset = float
-        normalization = float<=1
-        dropout_rate = float, entre 0 e 1
-        funcao_erro = função ou None
-        funcao_acuracia = função ou None
-        
-        n_inputs é a dimensão da entrada desta camada, por exemplo, se esta camada recebe vetores com 10 coordenadas e retorna vetores com 20 coordenadas, então n_inputs=10.
-        
-        n_outputs é a quantidade de neurônios desta camada, por exemplo, se esta camada recebe vetores com 10 coordenadas e retorna vetores com 20 coordenadas, então n_outputs=20.
-        
-        bias_offset é o valor inicial do bias.
-        
-        normalization é a velocidade de atualização dos parametros de normalização, se menor que zero, então não haverá normalização.
-        
-        ativ_func é a função de ativação da camada, deve receber apenas um tensorflow.Tensor e retornar um tensroflow.Tensor, além disso, deve ser feita apenas com objetos e funções do tensorflow. Recomenda-se fortemente que o usuário use funções do arquivo 'Functions.py'.
-        
-        dropout_rate é a probabilidade de uma coordenada da ativação da camada ser multiplicada por zero durante a execução
-        
-        As funções de erro e acurácia seguem a mesma descrição que está na classe Layer.
-        
-        '''
+    def __init__(self,n_inputs,n_neurons,ativ_func,use_bias=True,bias_offset=0,weight_var=None,funcao_erro=None,funcao_acuracia=None,funcao_regularizacao=L2_regularization):
         Layer.__init__(self,funcao_erro,funcao_acuracia)
         self.type='Fully connected layer'
-        self.n_inputs,self.n_neurons,self.ativ_func,self.dropout_rate=n_inputs,n_neurons,ativ_func,float(dropout_rate)
+        self.n_inputs,self.n_neurons,self.ativ_func=n_inputs,n_neurons,ativ_func
         
         self.n_outputs=n_neurons
         
@@ -122,49 +99,16 @@ class FC(Layer):
             trainable=True)
         self.fixed_cost=funcao_regularizacao(self.w)
         self.params.append(self.w)
-        if normalization<0:
-            self.normalization=False
-            #Inicializando o vetor de viés da camada.
-            self.b = tf.Variable(
-                    initial_value=tf.zeros((1,n_neurons),dtype=config.var_float_type)+bias_offset,
-                trainable=True)
+        self.b = tf.Variable(
+                initial_value=tf.zeros((1,n_neurons),dtype=config.var_float_type)+bias_offset,
+            trainable=use_bias)
+        if use_bias:
             self.params.append(self.b)
-        else:
-            #Criando normalização
-            self.normalization=True
-            self.norm_layer=BN(n_inputs=n_neurons,update_rate=normalization)
-            self.params.append(self.norm_layer.params[0])
-            self.params.append(self.norm_layer.params[1])
         #Observe que as variáveis receberam o argumento trainable=True, isto sinaliza para o tensorflow que estas variáveis devem ser "vigiadas" para o cálculo de suas derivadas.
 
-    def execute(self,inpt,train_flag):
-        '''
-        Este método computa a ativação desta camada.
-        
-        inputs:
-        inpt=tensorflow.Tensor ou objeto compatível
-        train_flag = bool
-        
-        outputs:
-        Objeto da mesma classe do inputs.
-        
-        Comentários:
-        O inpt é a entrada da camada e deve vier em um formato compatível com as operações do tensorflow.
-        train_flag indica se a execução da camada será usada para treino, se train_flag=True, então usa-se o dropout, de outro modo não se usa dropout.
-        '''
-        if train_flag:
-            #aplicando dropout.
-            inputs=tf.nn.dropout(inpt,self.dropout_rate)
-        else:
-            #Fazendo a correção dos valores do input.
-            inputs=inpt/(1-self.dropout_rate)
+    def execute(self,inpt,mask=None):
         #calculando ativação.
-        ativation=tf.matmul(inputs,tf.cast(self.w,inputs.dtype))
-        if self.normalization:
-            ativation=self.norm_layer.execute(ativation,train_flag)
-        else:
-            ativation+=tf.cast(self.b,inputs.dtype)
-        
+        ativation=tf.matmul(inpt,tf.cast(self.w,inpt.dtype))+tf.cast(self.b,inpt.dtype)
         outputs=self.ativ_func(ativation)
         return outputs
     
@@ -185,29 +129,7 @@ class Conv(Layer):
     Onde ceiling é a função que recebe um número real retorna o menor inteiro maior do que este número.
     Obs.: Recomendo muito fortemente que o usuário pesquise sobre a operação de convolução para que fique claro o que esta camada faz.
     '''
-    def __init__(self,filter_shape,stride,ativ_func,padding='VALID',bias_offset=0,weight_var=None,dropout_rate=0.0,funcao_erro=None,funcao_acuracia=None,funcao_regularizacao=L2_regularization):
-        '''
-        filter_shape = lista ou tupla com 3 inteiros
-        stride = tupla com 2 inteiros
-        ativ_func = função
-        bias_offset = float
-        normalization = float<=1
-        dropout_rate = float, entre 0 e 1
-        funcao_erro = função ou None
-        funcao_acuracia = função ou None
-        
-        filter_shape são as dimensões do filtro da camada e deve seguir a seguinte ordem (Quantidade de mapas, Quantidade de linhas, Quantidade de colunas).
-        
-        ativ_func é a função de ativação da camada, deve receber apenas um tensorflow.Tensor e retornar um tensroflow.Tensor, além disso, deve ser feita apenas com objetos e funções do tensorflow. Recomenda-se fortemente que o usuário use funções do arquivo 'Functions.py'.
-        
-        bias_offset é o valor inicial do bias.
-        
-        normalization é a velocidade de atualização dos parametros de normalização, se menor que zero, então não haverá normalização.
-        
-        dropout_rate é a probabilidade de uma coordenada da ativação da camada ser multiplicada por zero durante a execução
-        
-        As funções de erro e acurácia seguem a mesma descrição que está na classe Layer.
-        '''
+    def __init__(self,filter_shape,stride,ativ_func,padding='VALID',use_bias=True,bias_offset=0,weight_var=None,funcao_erro=None,funcao_acuracia=None,funcao_regularizacao=L2_regularization):
         Layer.__init__(self,funcao_erro,funcao_acuracia)
         self.type='Convolution layer'
         
@@ -216,7 +138,6 @@ class Conv(Layer):
         self.padding=padding
         
         self.ativ_func=ativ_func
-        self.dropout_rate=float(dropout_rate)
         
         if weight_var is None:
             weight_var=1.0/(self.filter_shape[0]*self.filter_shape[1])
@@ -233,31 +154,12 @@ class Conv(Layer):
         #Inicializando o vetor de viés da camada.
         self.b = tf.Variable(
                 tf.zeros([1,1,1,self.filter_shape[3]],dtype=config.var_float_type)+bias_offset,
-            trainable=True)
-        self.params.append(self.b)
+            trainable=use_bias)
+        if use_bias:
+            self.params.append(self.b)
         #Observe que as variáveis receberam o argumento trainable=True, isto sinaliza para o tensorflow que estas variáveis devem ser "vigiadas" para o cálculo de suas derivadas.
-    def execute(self,inpt,train_flag):
-        '''
-        Este método computa a ativação desta camada.
-        
-        inputs:
-        inpt=tensorflow.Tensor ou objeto compatível
-        train_flag = bool
-        
-        outputs:
-        Objeto da mesma classe do inputs.
-        
-        Comentários:
-        O inpt é a entrada da camada e deve vier em um formato compatível com as operações do tensorflow.
-        train_flag indica se a execução da camada será usada para treino, se train_flag=True, então usa-se o dropout, de outro modo não se usa dropout.
-        '''
+    def execute(self,inpt,mask=None):
         inputs=inpt#tf.transpose(inpt,[1,2,3,0])
-        if train_flag:
-            #aplicando dropout.
-            inputs=tf.nn.dropout(inputs,self.dropout_rate)
-        else:
-            #Fazendo a correção dos valores do input.
-            inputs=inputs/(1-self.dropout_rate)
         #calculando a operação de convolução.
         input_filtered=tf.nn.conv2d(input=inputs,
                               filters=tf.cast(self.w,inputs.dtype),
@@ -288,23 +190,7 @@ class DeConv(Layer):
     
     Obs.: Recomendo muito fortemente que o usuário pesquise sobre a operação de convolução transposta para que fique claro o que esta camada faz.
     '''
-    def __init__(self,filter_shape,stride,ativ_func,padding='VALID',bias_offset=0,dropout_rate=0.0,weight_var=None,funcao_erro=None,funcao_acuracia=None,funcao_regularizacao=L2_regularization):
-        '''
-        filter_shape = lista ou tupla com 3 inteiros
-        stride = tupla com 2 inteiros
-        ativ_func = função
-        dropout_rate = float, entre 0 e 1
-        funcao_erro = função ou None
-        funcao_acuracia = função ou None
-        
-        filter_shape são as dimensões do filtro da camada e deve seguir a seguinte ordem (Quantidade de mapas, Quantidade de linhas, Quantidade de colunas).
-        
-        ativ_func é a função de ativação da camada, deve receber apenas um tensorflow.Tensor e retornar um tensroflow.Tensor, além disso, deve ser feita apenas com objetos e funções do tensorflow. Recomenda-se fortemente que o usuário use funções do arquivo 'Functions.py'.
-        
-        dropout_rate é a probabilidade de uma coordenada da ativação da camada ser multiplicada por zero durante a execução
-        
-        As funções de erro e acurácia seguem a mesma descrição que está na classe Layer.
-        '''
+    def __init__(self,filter_shape,stride,ativ_func,padding='VALID',use_bias=True,bias_offset=0,weight_var=None,funcao_erro=None,funcao_acuracia=None,funcao_regularizacao=L2_regularization):
         Layer.__init__(self,funcao_erro,funcao_acuracia)
         self.type='Deconvolution layer'
         
@@ -313,7 +199,6 @@ class DeConv(Layer):
         self.padding=padding
         
         self.ativ_func=ativ_func
-        self.dropout_rate=float(dropout_rate)
         if weight_var is None:
             weight_var=1.0/(self.filter_shape[0]*self.filter_shape[1])
             
@@ -329,35 +214,15 @@ class DeConv(Layer):
         #Inicializando o vetor de viés da camada.
         self.b = tf.Variable(
                 tf.zeros([1,1,1,self.filter_shape[2]],dtype=config.var_float_type)+bias_offset,
-            trainable=True)
-        self.params.append(self.b)
+            trainable=use_bias)
+        if use_bias:
+            self.params.append(self.b)
 
         #Observe que as variáveis receberam o argumento trainable=True, isto sinaliza para o tensorflow que estas variáveis devem ser "vigiadas" para o cálculo de suas derivadas.
         
-    def execute(self,inpt,train_flag):
-        '''
-        Este método computa a ativação desta camada.
-        
-        inputs:
-        inpt=tensorflow.Tensor ou objeto compatível
-        train_flag = bool
-        
-        outputs:
-        Objeto da mesma classe do inputs.
-        
-        Comentários:
-        O inpt é a entrada da camada e deve vier em um formato compatível com as operações do tensorflow.
-        train_flag indica se a execução da camada será usada para treino, se train_flag=True, então usa-se o dropout, de outro modo não se usa dropout.
-        '''
+    def execute(self,inpt,mask=None):
         #calculando a operação de convolução.
         inputs=inpt#tf.transpose(inpt,[1,2,3,0])
-        
-        if train_flag:
-            #aplicando dropout.
-            inputs=tf.nn.dropout(inputs,self.dropout_rate)
-        else:
-            #Fazendo a correção dos valores do input.
-            inputs=inputs/(1-self.dropout_rate)
         
         if self.padding=='VALID':
             output_shape=[self.stride[0]*inputs.shape[1]+self.filter_shape[0]-1,
@@ -412,22 +277,6 @@ class BN(Layer):
     S* = S_N
     '''
     def __init__(self,n_inputs,update_rate=0.1,funcao_erro=None,funcao_acuracia=None):
-        '''
-        n_inputs = int > 0
-        update_rate = float, entre 0 e 1
-        funcao_erro = função ou None
-        funcao_acuracia = função ou None
-        
-        n_inputs é a dimensão da entrada desta camada, por exeplo, se esta camada recebe vetores com 10 coordenadas e retorna vetores com 20 coordenadas, então n_inputs=10.
-        
-        update_rate é a taxa de atualização da média e do desvio padrão a ser usado fora do treino, equivale ao A da descrição da classe.
-        
-        ativ_func é a função de ativação da camada, deve receber apenas um tensorflow.Tensor e retornar um tensroflow.Tensor, além disso, deve ser feita apenas com objetos e funções do tensorflow. Recomenda-se fortemente que o usuário use funções do arquivo 'Functions.py'.
-        
-        dropout_rate é a probabildade de uma coordenada da ativação da camada ser multiplicada por zero durante a execução
-        
-        As funções de erro e acurácia seguem a mesma descrição que está na classe Layer.
-        '''
         Layer.__init__(self,funcao_erro,funcao_acuracia)
         self.type='Batch normalization layer'
         self.n_inputs,self.n_outputs=n_inputs,n_inputs
@@ -442,7 +291,7 @@ class BN(Layer):
         
         self.params=[self.mean_scale,self.var_scale]
 
-    def execute(self,inpt,train_flag):
+    def execute(self,inpt,mask=None):
         '''
         Este método computa a ativação desta camada.
         
@@ -459,16 +308,34 @@ class BN(Layer):
         '''
         inputs=inpt
         
-        if train_flag:
-            current_mean,current_var=tf.nn.moments(inputs,axes=0,keepdims=True)
-            current_var=current_var
-            mask=tf.cast(current_var!=0,dtype=current_mean.dtype)
-            ativation=tf.nn.batch_normalization(inputs, current_mean, current_var, tf.cast(self.mean_scale,inputs.dtype), tf.cast(self.var_scale,inputs.dtype), zero)
-            self.global_mean.assign((1-self.update_rate)*self.global_mean+self.update_rate*tf.cast(current_mean,config.var_float_type))
-            self.global_var.assign((1-self.update_rate)*self.global_var+self.update_rate*tf.cast(current_var,config.var_float_type))
-        else:
-            mask=tf.cast(self.global_var!=0,dtype=inpt.dtype)
-            ativation=tf.nn.batch_normalization(inputs, tf.cast(self.global_mean,inputs.dtype), tf.cast(self.global_var,inputs.dtype), tf.cast(self.mean_scale,inputs.dtype), tf.cast(self.var_scale,inputs.dtype), zero)
+        current_mean,current_var=tf.nn.moments(inputs,axes=0,keepdims=True)
+        current_var=current_var
+        mask=tf.cast(current_var!=0,dtype=current_mean.dtype)
+        ativation=tf.nn.batch_normalization(inputs, current_mean, current_var, tf.cast(self.mean_scale,inputs.dtype), tf.cast(self.var_scale,inputs.dtype), zero)
+        self.global_mean.assign((1-self.update_rate)*self.global_mean+self.update_rate*tf.cast(current_mean,config.var_float_type))
+        self.global_var.assign((1-self.update_rate)*self.global_var+self.update_rate*tf.cast(current_var,config.var_float_type))
+        
+        outputs=ativation*mask
+        return outputs
+    def predict(self,inpt,mask=None):
+        '''
+        Este método computa a ativação desta camada.
+        
+        inputs:
+        inpt=tensorflow.Tensor ou objeto compatível
+        train_flag = bool
+        
+        outputs:
+        Objeto da mesma classe do inputs.
+        
+        Comentários:
+        O inpt é a entrada da camada e deve vier em um formato compatível com as operações do tensorflow.
+        train_flag indica se a execução da camada será usada para treino, se train_flag=True, então usa-se o dropout, de outro modo não se usa dropout.
+        '''
+        inputs=inpt
+        
+        mask=tf.cast(self.global_var!=0,dtype=inpt.dtype)
+        ativation=tf.nn.batch_normalization(inputs, tf.cast(self.global_mean,inputs.dtype), tf.cast(self.global_var,inputs.dtype), tf.cast(self.mean_scale,inputs.dtype), tf.cast(self.var_scale,inputs.dtype), zero)
         
         outputs=ativation*mask
         return outputs
@@ -495,7 +362,7 @@ class integration(Layer):
         self.type='Integration layer'
         Layer.__init__(self,funcao_erro,funcao_acuracia)
         self.layers=layers
-    def execute(self,inpt,train_flag):
+    def execute(self,inpt,mask=None):
         '''
         Este método computa a ativação desta camada.
         
@@ -511,8 +378,16 @@ class integration(Layer):
         train_flag indica se a execução da camada será usada para treino, se train_flag=True, então usa-se o dropout, de outro modo não se usa dropout.
         '''
         inputs=inpt
+        mask=None
         for i in self.layers:
-            inputs=i.execute(inputs,train_flag)
+            inputs,mask=i.execute(inputs,mask),i.compute_mask(inputs,mask)
+        return inputs
+    
+    def predict(self,inpt,mask=None):
+        inputs=inpt
+        mask=None
+        for i in self.layers:
+            inputs,mask=i.predict(inputs,mask),i.compute_mask(inputs,mask)
         return inputs
     
 class Mixed(Layer):
@@ -540,25 +415,18 @@ class Mixed(Layer):
         self.layers=layers
         self.params=[param for layer in layers for param in layer.params]
         self.fixed_cost=sum([layer.fixed_cost for layer in layers])
-    def execute(self,inpt,train_flag):
-        '''
-        Este método computa a ativação desta camada.
-        
-        inputs:
-        inpt=tensorflow.Tensor ou objeto compatível
-        train_flag = bool
-        
-        outputs:
-        Objeto da mesma classe do inputs.
-        
-        Comentários:
-        O inpt é a entrada da camada e deve vier em um formato compatível com as operações do tensorflow.
-        train_flag indica se a execução da camada será usada para treino, se train_flag=True, então usa-se o dropout, de outro modo não se usa dropout.
-        '''
+    def execute(self,inpt,mask=None):
         if self.index is None:
-            outputs=[layer.execute(inpt,train_flag) for layer in self.layers]
+            outputs=[layer.execute(inpt,mask) for layer in self.layers]
         else:
-            outputs=[layer.execute(inpt[:,a:b],train_flag) for layer,[a,b] in zip(self.layers,self.index)]
+            outputs=[layer.execute(inpt[:,a:b],mask) for layer,[a,b] in zip(self.layers,self.index)]
+        return tf.concat(outputs,axis=1)
+    
+    def predict(self,inpt,mask=None):
+        if self.index is None:
+            outputs=[layer.predict(inpt,mask) for layer in self.layers]
+        else:
+            outputs=[layer.predict(inpt[:,a:b],mask) for layer,[a,b] in zip(self.layers,self.index)]
         return tf.concat(outputs,axis=1)
     
 class Batch(Layer):
@@ -583,24 +451,11 @@ class Batch(Layer):
         self.n_outputs=layers[-1].n_outputs
         self.params=[param for layer in layers for param in layer.params]
         self.fixed_cost=sum([layer.fixed_cost for layer in layers])
-    def execute(self,inpt,train_flag):
-        '''
-        Este método computa a ativação desta camada.
-        
-        inputs:
-        inpt=tensorflow.Tensor ou objeto compatível
-        train_flag = bool
-        
-        outputs:
-        Objeto da mesma classe do inputs.
-        
-        Comentários:
-        O inpt é a entrada da camada e deve vier em um formato compatível com as operações do tensorflow.
-        train_flag indica se a execução da camada será usada para treino, se train_flag=True, então usa-se o dropout, de outro modo não se usa dropout.
-        '''
+    def execute(self,inpt,mask=None):
         inputs=inpt
+        mask=None
         for i in self.layers:
-            inputs=i.execute(inputs,train_flag)
+            inputs,mask=i.execute(inputs,mask),i.compute_mask(inputs,mask)
             
         return inputs
     
@@ -627,7 +482,7 @@ class Bool(Layer):
         self.test=test
         self.params=[param for layer in layers.values() for param in layer.params]
         self.fixed_cost=sum([layer.fixed_cost for layer in layers.values()])
-    def execute(self,inpt,train_flag):
+    def execute(self,inpt,mask=None):
         '''
         Este método computa a ativação desta camada.
         
@@ -647,7 +502,17 @@ class Bool(Layer):
         indexes=[]
         for i in self.layers.keys():
             indexes.append(tf.squeeze(tf.where(values==i)))
-            outputs.append(self.layers[i].execute(tf.gather(inpt,indexes[-1],axis=0),train_flag))
+            outputs.append(self.layers[i].execute(tf.gather(inpt,indexes[-1],axis=0),mask))
+        index=tf.concat(indexes,axis=1)
+        output=tf.concat(outputs,axis=0)
+        return tf.gather(output,tf.argsort(index),axis=0)
+    def predict(self,inpt,mask=None):
+        values=self.test(inpt)
+        outputs=[]
+        indexes=[]
+        for i in self.layers.keys():
+            indexes.append(tf.squeeze(tf.where(values==i)))
+            outputs.append(self.layers[i].predict(tf.gather(inpt,indexes[-1],axis=0),mask))
         index=tf.concat(indexes,axis=1)
         output=tf.concat(outputs,axis=0)
         return tf.gather(output,tf.argsort(index),axis=0)
@@ -670,7 +535,7 @@ class Noise(Layer):
         self.type='Bool layer'
         Layer.__init__(self,funcao_erro,funcao_acuracia)
         self.std=std
-    def execute(self,inpt,train_flag):
+    def execute(self,inpt,mask=None):
         '''
         Este método computa a ativação desta camada.
         
@@ -704,7 +569,7 @@ class Cast(Layer):
         self.type='Cast layer'
         Layer.__init__(self,funcao_erro,funcao_acuracia)
         self.dtype=dtype
-    def execute(self,inpt,train_flag):
+    def execute(self,inpt,mask=None):
         '''
         Este método computa a ativação desta camada.
         
@@ -738,7 +603,7 @@ class Reshape(Layer):
         self.type='Cast layer'
         Layer.__init__(self,funcao_erro,funcao_acuracia)
         self.shape=shape
-    def execute(self,inpt,train_flag):
+    def execute(self,inpt,mask=None):
         '''
         Este método computa a ativação desta camada.
         
@@ -788,7 +653,7 @@ class Pooling(Layer):
         
         self.fixed_cost=0
         #Observe que as variáveis receberam o argumento trainable=True, isto sinaliza para o tensorflow que estas variáveis devem ser "vigiadas" para o cálculo de suas derivadas.
-    def execute(self,inpt,train_flag):
+    def execute(self,inpt,mask=None):
         '''
         Este método computa a ativação desta camada.
         
@@ -817,14 +682,12 @@ class LSTM(Layer):
     '''
     A escrever
     '''
-    def __init__(self,n_inputs,n_outputs,ativ_func=default.TanH,recur_func=default.Sigmoid,return_sequence=False,bias_offset=0,dropout_rate=0.0,funcao_erro=None,funcao_acuracia=None,funcao_regularizacao=L2_regularization):
+    def __init__(self,n_inputs,n_outputs,ativ_func=default.TanH,recur_func=default.Sigmoid,return_sequence=False,use_bias=True,bias_offset=0,funcao_erro=None,funcao_acuracia=None,funcao_regularizacao=L2_regularization):
         '''
         A preencher
         
         '''
         Layer.__init__(self,funcao_erro,funcao_acuracia)
-        self.type='Long short-therm memory layer'
-        self.dropout_rate=float(dropout_rate)
         self.return_sequence=return_sequence
         
         self.n_inputs=n_inputs
@@ -849,34 +712,36 @@ class LSTM(Layer):
         
         self.b = tf.Variable(
                 initial_value=tf.zeros((1,n_outputs*4))+bias_offset,
-            trainable=True)        
-        self.params.append(self.b)
-        self.recurrent=True
+            trainable=False) 
+        if use_bias:
+            self.params.append(self.b)
 
-    def cell(self,h_before,inpts):
+    def cell(self,h_before,inpts_list):
+        inpts=inpts_list[0]
+        mask=tf.expand_dims(tf.expand_dims(inpts_list[1],axis=0),axis=2)
         h_t,s_t=tf.unstack(h_before,axis=0)
-        ativacao=tf.matmul(inpts,self.w)+tf.matmul(h_t,self.recur_w)+self.b
+        acvtivacao=self.bias+tf.matmul(inpts,self.kernel)+tf.matmul(h_t,self.recurrent_kernel)
         at_1,at_2,at_3,at_4=tf.split(ativacao,4,axis=1)
 
-        s_t=self.recur_func(at_1)*s_t+self.recur_func(at_2)*self.ativ_func(at_3)
-        h_t=self.ativ_func(s_t)*self.recur_func(at_4)
-        return tf.stack([h_t,s_t],axis=0)
-
-    def execute(self,inpt,train_flag=False,h_before=None,s_before=None):
+        s_t=tf.nn.sigmoid(at_2)*s_t+tf.nn.sigmoid(at_1)*tf.nn.tanh(at_3)
+        h_t=tf.nn.tanh(s_t)*tf.nn.sigmoid(at_4)
+    
+        return tf.where(mask,tf.stack([h_t,s_t],axis=0),h_before)
+    def compute_mask(self, inputs, mask=None):
+        return mask if self.return_sequences else None
+    def execute(self,inpt,mask=None,h_before=None):
         if h_before is None or s_before is None:
             h_t=tf.pad(inpt[:,0,:]*0,[[0,0],[0,self.n_outputs]])[:,-self.n_outputs:]
             h_t=tf.stack([h_t,h_t],axis=0)
         else:
             h_t=h_before
-        if self.return_sequence:
-            output_tensor=tf.scan(self.cell,tf.transpose(inpt,[1,0,2]),initializer=h_t,swap_memory=config.swap_memory_flag)[:,1]
-            output_tensor=tf.transpose(output_tensor,[1,0,2])
-        else:
-            for i in range(tf.shape(inpt)[1]):
-                tf.autograph.experimental.set_loop_options(swap_memory=config.swap_memory_flag)
-                h_t=self.cell(h_t,inpt[:,i,:])
-            output_tensor=h_t[0,:,:self.n_outputs]
-        return output
+            
+        output_tensor=tf.scan(self.cell,[tf.transpose(inpt,[1,0,2]),tf.transpose(mask,[1,0])],initializer=h_t,swap_memory=config.swap_memory_flag)[:,0]
+        output_tensor=tf.transpose(output_tensor,[1,0,2])
+        if self.return_sequences:
+            output_tensor[:,-1,:]
+            
+        return output_tensor
     
 class Gather(FC):
     def __init__(self,n_inputs,keep_index,funcao_erro=None,funcao_acuracia=None,funcao_regularizacao=L2_regularization):
@@ -885,7 +750,7 @@ class Gather(FC):
         self.type='Gather layer'
         self.n_inputs,self.n_outputs,self.keep_index=n_inputs,len(keep_index),keep_index
         self.params=[]
-    def execute(self,inpt,train_flag):
+    def execute(self,inpt,mask=None):
         '''
         A escrever
         '''
@@ -899,16 +764,21 @@ class TimeDistributed(FC):
         self.layer=layer
         self.params=layer.params
         
-        self.train_loop=lambda x: self.layer.execute(x,True)
-        self.exec_loop=lambda x: self.layer.execute(x,False)
-    def execute(self,inpt,train_flag):
+        self.exec_step=lambda x: self.layer.execute(x[0],x[1])
+        self.pred_step=lambda x: self.layer.predict(x[0],x[1])
+    def execute(self,inpt,mask=None):
         '''
         A escrever
         '''
-        if train_flag:
-            activation=tf.map_fn(self.exec_loop,tf.transpose(inpt,[1,0,2]))
-        else:
-            activation=tf.map_fn(self.train_loop,tf.transpose(inpt,[1,0,2]))
+        activation=tf.map_fn(self.exec_step,[tf.transpose(inpt,[1,0,2]),tf.transpose(mask,[1,0])])
+        activation=tf.transpose(activation,[1,0,2])
+        return activation
+    
+    def predict(self,inpt,mask=None):
+        '''
+        A escrever
+        '''
+        activation=tf.map_fn(self.pred_step,[tf.transpose(inpt,[1,0,2]),tf.transpose(mask,[1,0])])
         activation=tf.transpose(activation,[1,0,2])
         return activation
 
@@ -917,6 +787,15 @@ class One_hot(Layer):
         Layer.__init__(self,funcao_erro,funcao_acuracia)
         self.vec_len=vec_len
         self.axis=axis
-    def execute(self,inpt,train_flag):
+    def execute(self,inpt,mask=None):
         activ=tf.concat(tf.unstack(tf.one_hot(inpt,self.vec_len,dtype=config.float_type),axis=self.axis+1),axis=self.axis)
         return activ
+    
+class Dropout(Layer):
+    def __init__(self,dropout_rate,funcao_erro=None,funcao_acuracia=None):
+        Layer.__init__(self,funcao_erro,funcao_acuracia)
+        self.dropout_rate=dropout_rate
+    def execute(inpt,mask=None):
+        return tf.nn.dropout(inpt,self.dropout_rate)
+    def predict(inpt,mask=None):
+        return inpt/(1-self.dropout_rate)

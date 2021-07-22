@@ -194,8 +194,9 @@ class FowardNetwork(NeuralNetwork):
     @tf.function(experimental_compile=config.XLA_func)
     def classificar(self,entrada,previous_value=None):
         processamento=entrada
+        mask=None
         for layer in self.layers:
-            processamento=layer.execute(processamento,False)
+            processamento,mask=layer.predict(processamento,mask),layer.compute_mask(processamento,mask)
         return processamento
 
     def erros(self,x,y):
@@ -210,16 +211,18 @@ class FowardNetwork(NeuralNetwork):
     def encode(self,entrada):
         #assert self.output_layer>=0 and isinstance(self.output_layer,int),'Esta rede não é um auto-encoder. Caso você queira um auto-encoder, defina output_layer como um inteiro não-negativo.'
         processamento=entrada
+        mask=None
         for layer in self.layers[:self.output_layer+1]:
-            processamento=layer.execute(processamento,False)
+            processamento,mask=layer.execute(processamento,mask),layer.compute_mask(processamento,mask)
         return processamento
 
     @tf.function(experimental_compile=config.XLA_func)
     def decode(self,entrada):
         assert self.output_layer>=0 and isinstance(self.output_layer,int),'Esta rede não é um auto-encoder. Caso você queira um auto-encoder, defina output_layer como um inteiro não-negativo.'
         processamento=entrada
+        mask=None
         for layer in self.layers[self.output_layer+1:]:
-            processamento=layer.execute(processamento,False)
+            processamento,mask=layer.execute(processamento,mask),layer.compute_mask(processamento,mask)
         return processamento
 
     def foward_prop(self,x,y):
@@ -227,8 +230,9 @@ class FowardNetwork(NeuralNetwork):
         cost = 0
         #Adicionando o custo de cada camada ao custo total. Cada camada tem uma flag que informa se o custo da camada deve ser somado ao custo total.
         current_value=x
+        mask=None
         for layer in self.layers:
-            current_value=layer.execute(current_value,True)
+            current_value,mask=layer.execute(current_value,mask),layer.compute_mask(current_value,mask)
             if layer.cost_flag:
                 cost=cost+layer.cost_weight*layer.cost(current_value,y)
         return [cost]
