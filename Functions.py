@@ -126,26 +126,26 @@ def report(network):
             error_list.append([instant_erro])
         error_inside=tf.squeeze(tf.math.reduce_mean(error_list,axis=0))
             
-        print('Train data ',network.loading_symbols[network.loading_index%4],'                                                  \n',
+        print('Train data          ',network.loading_symbols[network.loading_index%4],'                                                  \n',
               'Accuracy - ',error_inside[1].numpy(),'\n',
               'Cost     - ',error_inside[0].numpy())
               
     obs_time=got_the_time(network.end_time-network.initial_time)
     check_time=got_the_time(time.time()-network.end_time)
     
-    print('Accuracy ',network.loading_symbols[network.loading_index%4],'\n',
+    print('Accuracy            ',network.loading_symbols[network.loading_index%4],'\n',
           'Current  - ',network.historico['accuracy'][-1].numpy(),'\n',
-          'Best - ',network.best_accuracy.numpy())
+          'Best     - ',network.best_accuracy.numpy())
     print('Error ',network.loading_symbols[network.loading_index%4],'\n',
           'Current  - ',network.historico['cost'][-1].numpy(),'\n',
-          'Best - ',network.best_cost.numpy())
+          'Best     - ',network.best_cost.numpy())
     # Aqui consideramos que o melhor valor da função de erro é onde temos a melhor acurácia com os pesos que possuem melhor acurácia.
     print('Train configuration ',network.loading_symbols[network.loading_index%4],'\n',
           'Learning method - ',network.otimization,' - Weight Penalty - ',network.weight_penalty,'\n',
-          'Batch size - ',network.len_subsets,' - Weights - ',[(i,float(network.layers[i].cost_weight)) for i in range(len(network.layers)) if network.layers[i].cost_flag],'\n',
-          'Train time - ',obs_time,'\n',
-          'Check time - ',check_time,'\n',
-          'Iteration - ',network.times)
+          'Batch size      - ',network.len_subsets,' - Weights - ',[(i,float(network.layers[i].cost_weight)) for i in range(len(network.layers)) if network.layers[i].cost_flag],'\n',
+          'Train time      - ',obs_time,'\n',
+          'Check time      - ',check_time,'\n',
+          'Iteration       - ',network.times)
     
 def report_GAN(network):
     global dataset_check_flag

@@ -1,6 +1,6 @@
 float_type='float32'
-var_float_type='float32'
-underflow_constant_value=10**(-4)
+var_float_type='float16'
+underflow_constant_value=10**-4
 memory_pre_allocation=False
 
 #Esta flag indica se os Tensors criados ao longo de um while_loop devem ser transferidos da GPU para a CPU (ver documentação do tf.while_loop).
