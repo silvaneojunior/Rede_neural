@@ -3,7 +3,7 @@ import config
 from Functions import L2_regularization
 import Functions as default
 
-__version__='2.4.0'
+__version__='2.4.1'
 
 tf.config.optimizer.set_jit(config.XLA_opt)
 zero=config.underflow_constant_value
@@ -41,18 +41,16 @@ class Layer:
         return self.execute(inputs,mask)
     
 class FC(Layer):
-    def __init__(self,n_inputs,n_neurons,activ_function,use_bias=True,bias_offset=0,weight_var=None,error_function=None,accur_function=None,regul_function=L2_regularization):
+    def __init__(self,n_inputs,n_neurons,activ_function,use_bias=True,bias_offset=0,weight_c=6,error_function=None,accur_function=None,regul_function=L2_regularization):
         Layer.__init__(self,error_function,accur_function)
         self.type='Fully connected layer'
         self.n_inputs,self.n_neurons,self.activ_function=n_inputs,n_neurons,activ_function
         
         self.n_outputs=n_neurons
         
-        if weight_var is None:
-            weight_var=1.0/(n_inputs)
-        
+        glorot_limit=(weight_c/(n_inputs+n_neurons))**0.5
         self.w = tf.Variable(
-                initial_value=tf.random.normal([self.n_inputs,n_neurons],0, weight_var**0.5,dtype=config.var_float_type),
+                initial_value=tf.random.uniform([n_inputs,n_neurons],-glorot_limit,glorot_limit,dtype=config.var_float_type),
             trainable=True)
         self.fixed_cost=regul_function(self.w)
         self.params.append(self.w)
@@ -68,7 +66,7 @@ class FC(Layer):
         return outputs
     
 class Conv(Layer):
-    def __init__(self,filter_shape,activ_function,stride=[1,1],padding='VALID',use_bias=True,bias_offset=0,weight_var=None,error_function=None,accur_function=None,regul_function=L2_regularization):
+    def __init__(self,filter_shape,activ_function,stride=[1,1],padding='VALID',use_bias=True,bias_offset=0,weight_c=6,error_function=None,accur_function=None,regul_function=L2_regularization):
         Layer.__init__(self,error_function,accur_function)
         self.type='Convolution layer'
         
@@ -78,13 +76,11 @@ class Conv(Layer):
         
         self.activ_function=activ_function
         
-        if weight_var is None:
-            weight_var=1.0/(self.filter_shape[0]*self.filter_shape[1])
-        
+        glorot_limit=(weight_c/(self.filter_shape[0]*self.filter_shape[1]*self.filter_shape[2]+self.filter_shape[3]))**0.5
         self.w = tf.Variable(
-                tf.random.normal(self.filter_shape,
-                                 0,
-                                 (weight_var)**0.5,
+                tf.random.uniform(self.filter_shape,
+                                 -glorot_limit,
+                                 glorot_limit,
                                  dtype=config.var_float_type),
                 trainable=True)
         self.fixed_cost=regul_function(self.w)
@@ -108,7 +104,7 @@ class Conv(Layer):
     
     
 class DeConv(Layer):
-    def __init__(self,filter_shape,activ_function,stride=[1,1],padding='VALID',use_bias=True,bias_offset=0,weight_var=None,error_function=None,accur_function=None,regul_function=L2_regularization):
+    def __init__(self,filter_shape,activ_function,stride=[1,1],padding='VALID',use_bias=True,bias_offset=0,weight_c=6,error_function=None,accur_function=None,regul_function=L2_regularization):
         Layer.__init__(self,error_function,accur_function)
         self.type='Deconvolution layer'
         
@@ -117,13 +113,12 @@ class DeConv(Layer):
         self.padding=padding
         
         self.activ_function=activ_function
-        if weight_var is None:
-            weight_var=1.0/(self.filter_shape[0]*self.filter_shape[1])
-            
+        
+        glorot_limit=(weight_c/(self.filter_shape[0]*self.filter_shape[1]*self.filter_shape[2]+self.filter_shape[3]))**0.5
         self.w = tf.Variable(
-                tf.random.normal(self.filter_shape,
-                                 0,
-                                 (weight_var)**0.5,
+                tf.random.uniform(self.filter_shape,
+                                 -glorot_limit,
+                                 glorot_limit,
                                  dtype=config.var_float_type),
                 trainable=True)
         self.params.append(self.w)
@@ -332,7 +327,7 @@ class Pooling(Layer):
         return outputs
     
 class LSTM(Layer):
-    def __init__(self,n_inputs,n_outputs,activ_function=default.TanH,recur_func=default.Sigmoid,return_sequence=False,use_bias=True,bias_offset=0,error_function=None,accur_function=None,regul_function=L2_regularization):
+    def __init__(self,n_inputs,n_outputs,activ_function=default.TanH,recur_func=default.Sigmoid,return_sequence=False,use_bias=True,bias_offset=0,weight_c=6,error_function=None,accur_function=None,regul_function=L2_regularization):
         Layer.__init__(self,error_function,accur_function)
         self.return_sequence=return_sequence
         
@@ -344,14 +339,15 @@ class LSTM(Layer):
         self.params=[]
         self.fixed_cost=0
         
+        glorot_limit=(weight_c/(n_inputs+n_outputs))**0.5
         self.w = tf.Variable(
-                initial_value=tf.random.normal([self.n_inputs,n_outputs*4],0, (n_outputs*4)**-0.5),
+                initial_value=tf.random.uniform([n_inputs,n_outputs*4],-glorot_limit,glorot_limit),
             trainable=True)
         self.fixed_cost+=regul_function(self.w)
         self.params.append(self.w)
         
         self.recur_w = tf.Variable(
-                initial_value=tf.random.normal([n_outputs,n_outputs*4],0, (n_outputs*4)**-0.5),
+                initial_value=tf.random.uniform([n_inputs,n_outputs*4],-glorot_limit,glorot_limit),
             trainable=True)
         self.fixed_cost+=regul_function(self.recur_w)
         self.params.append(self.recur_w)

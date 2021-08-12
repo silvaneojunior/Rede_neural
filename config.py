@@ -1,5 +1,5 @@
 float_type='float32'
-var_float_type='float16'
+var_float_type='float32'
 underflow_constant_value=10**-4
 memory_pre_allocation=False
 

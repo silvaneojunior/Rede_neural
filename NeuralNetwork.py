@@ -7,7 +7,7 @@ import Otimizers
 from Functions import report,report_GAN
 import Layers as Layers
 
-__version__='2.4.0'
+__version__='2.4.1'
 
 print('TensorFlow version = {}'.format(tf.__version__))
 print('Network version = {}'.format(__version__))
