@@ -1,1 +1,0 @@
-Coloque estes arquivos na mesma pasta do módulo NeuralNetwork.py
