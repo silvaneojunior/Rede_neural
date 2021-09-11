@@ -217,14 +217,14 @@ class FowardNetwork(NeuralNetwork):
                 self.loading_index+=1
 
                 if no_better_count>no_better_interval:
-                    self.update_parametros(self.best_param)
+                    self.update_parameters(self.best_param)
                     print('Early Stop')
                     break
             if self.times-initial_epoch>=number_of_epochs:
-                self.update_parametros(self.best_param)
+                self.update_parameters(self.best_param)
                 print('Finished')
         except KeyboardInterrupt:
-            self.update_parametros(self.best_param)
+            self.update_parameters(self.best_param)
             print('Forced Stop')
             
 class GANetwork(NeuralNetwork):

@@ -162,29 +162,29 @@ class BN(Layer):
         self.n_inputs,self.n_outputs=n_inputs,n_inputs
         self.update_rate=update_rate
         
-        self.mean_scale=tf.Variable(0,dtype=config.var_float_type,trainable=True)
-        self.var_scale=tf.Variable(1,dtype=config.var_float_type,trainable=True)
-        self.global_mean=tf.Variable([[0]*n_inputs],dtype=config.var_float_type,trainable=False)
-        self.global_var=tf.Variable([[1]*n_inputs],dtype=config.var_float_type,trainable=False)
+        self.mean_scale=tf.Variable(1,dtype=config.var_float_type,trainable=True)
+        self.std_scale=tf.Variable(1,dtype=config.var_float_type,trainable=True)
+        self.global_mean=tf.Variable(tf.zeros(n_inputs),dtype=config.var_float_type,trainable=False)
+        self.global_std=tf.Variable(tf.ones(n_inputs),dtype=config.var_float_type,trainable=False)
         
-        self.params=[self.mean_scale,self.var_scale]
+        self.params=[self.mean_scale,self.std_scale]
     def execute(self,inpt,mask=None):
         inputs=inpt
         
-        current_mean,current_var=tf.nn.moments(inputs,axes=0,keepdims=True)
-        current_var=current_var
-        mask=tf.cast(current_var!=0,dtype=current_mean.dtype)
-        activation=tf.nn.batch_normalization(inputs, current_mean, current_var, tf.cast(self.mean_scale,inputs.dtype), tf.cast(self.var_scale,inputs.dtype), zero)
+        current_mean,current_std=tf.math.reduce_mean(inputs,axis=0,keepdims=False),tf.math.reduce_std(inputs,axis=0,keepdims=False)
+        current_std=current_std
+        mask=tf.cast(current_std!=0,dtype=current_mean.dtype)
+        activation=(inputs-tf.cast(self.mean_scale,inputs.dtype)*current_mean)/(tf.cast(self.std_scale,inputs.dtype)*current_std+zero)
         self.global_mean.assign((1-self.update_rate)*self.global_mean+self.update_rate*tf.cast(current_mean,config.var_float_type))
-        self.global_var.assign((1-self.update_rate)*self.global_var+self.update_rate*tf.cast(current_var,config.var_float_type))
+        self.global_std.assign((1-self.update_rate)*self.global_std+self.update_rate*tf.cast(current_std,config.var_float_type))
         
         outputs=activation*mask
         return outputs
     def predict(self,inpt,mask=None):
         inputs=inpt
         
-        mask=tf.cast(self.global_var!=0,dtype=inpt.dtype)
-        activation=tf.nn.batch_normalization(inputs, tf.cast(self.global_mean,inputs.dtype), tf.cast(self.global_var,inputs.dtype), tf.cast(self.mean_scale,inputs.dtype), tf.cast(self.var_scale,inputs.dtype), zero)
+        mask=tf.cast(self.global_std!=0,dtype=inpt.dtype)
+        activation=(inputs-tf.cast(self.mean_scale,inputs.dtype)*self.global_mean)/(tf.cast(self.std_scale,inputs.dtype)*self.global_std+zero)
         
         outputs=activation*mask
         return outputs
@@ -302,7 +302,31 @@ class Reshape(Layer):
     def execute(self,inpt,mask=None):
         return tf.reshape(inpt,[tf.shape(inpt)[0]]+self.shape)
     
-class Pooling(Layer):
+class MaxPooling(Layer):
+    def __init__(self,pooling_size,stride=None,error_function=None,accur_function=None):
+        Layer.__init__(self,error_function,accur_function)
+        self.type='Convolution layer'
+        self.pooling_size=pooling_size
+        
+        if stride is None:
+            self.stride=self.pooling_size
+        else:
+            self.stride=stride
+            
+        self.padding='VALID'
+
+        self.fixed_cost=0
+    def execute(self,inpt,mask=None):
+        inputs=inpt
+        input_filtered=tf.nn.max_pool2d(input=inputs,
+                                        ksize=self.pooling_size,
+                                        padding=self.padding,
+                                        strides=self.stride
+                                        )
+        outputs=input_filtered
+        return outputs
+    
+class MeanPooling(Layer):
     def __init__(self,pooling_size,stride=None,error_function=None,accur_function=None):
         Layer.__init__(self,error_function,accur_function)
         self.type='Convolution layer'

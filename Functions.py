@@ -22,20 +22,19 @@ TanH=lambda v:1.7159*tanh(2*v/3)
 
 # Cost functions
 
-def L2(output_expected,output_observed,mask=None):
-    error=tf.math.abs(output_expected-output_observed)
-    if mask is not None:
-        error=error*mask
-    return tf.math.reduce_mean(error)
+def Norm_Ln(n):
+    def func(output_expected,output_observed,mask=None):
+        error=tf.math.abs(output_expected-output_observed)**n/n
+        if mask is not None:
+            error=error*mask
+        return tf.math.reduce_mean(error)
+    return func
 
-def L1(output_expected,output_observed,mask=None):
-    error=((output_expected-output_observed)**2)/2
-    if mask is not None:
-        error=error*mask
-    return tf.math.reduce_mean(error)
+L1=Norm_Ln(1)
+L2=Norm_Ln(2)
 
 def Cross_Entropy(output_expected,output_observed,mask=None):
-    error=-(tf.math.log(output_expected)*output_observed)+(tf.math.log(1-output_expected)*(1-output_observed))
+    error=-(tf.math.log(output_expected)*output_observed)-(tf.math.log(1-output_expected)*(1-output_observed))
     if mask is not None:
         error=error*mask
     return tf.math.reduce_mean(error)
